@@ -1,4 +1,4 @@
-package raw
+package firehose
 
 import (
 	"encoding/json"
@@ -167,7 +167,6 @@ var levelToValue = map[string]int{
 func (adapter *Adapter) Stream(logstream chan *router.Message) {
 
 	for message := range logstream {
-
 		container := extractKubernetesInfo(message.Container)
 		dec := json.NewDecoder(strings.NewReader(message.Data))
 		for {
@@ -176,58 +175,65 @@ func (adapter *Adapter) Stream(logstream chan *router.Message) {
 			err := dec.Decode(&data)
 			if err == io.EOF {
 				// all done with this message, check next one
-				continue
+				break
 			}
 			if err != nil {
 				// not json
 				data = make(map[string]interface{})
 				data["message"] = message.Data
 			}
-
-			// rewrite format V0 into format V1
-			if fields, exist := data["@fields"]; exist {
-				if fieldMap, err := fields.(map[string]interface{}); err {
-					for k, v := range fieldMap {
-						data[strings.TrimLeft(k, "@")] = v
-					}
-					delete(data, "@fields")
-				}
-				// convert other fields?
+			adapter.deliverRecord(message, data, container)
+			if err != nil {
+				// if we got an error, better exit this loop
+				break
 			}
-
-			// make sure level is a number
-			// and populate log_level as string
-			if v, exist := data["level"]; exist {
-				if nb, ok := v.(string); ok {
-					if _, err := strconv.Atoi(nb); err != nil {
-						data["log_level"] = nb
-						if level, exist := levelToValue[nb]; exist {
-							data["level"] = level
-						} else {
-							delete(data, "level")
-						}
-					}
-				}
-			}
-
-			data["host"] = message.Container.Config.Hostname
-			data["container"] = container
-			data["source"] = message.Source
-
-			if _, exist := data["@timestamp"]; !exist {
-				data["@timestamp"] = message.Time
-			}
-			if _, exist := data["@version"]; !exist {
-				data["@version"] = 1
-			}
-
-			if adapter.printContent && adapter.debugContainers[container.ID] {
-				adapter.logD("stream: %s enqueing: %v \n", container.ID, data)
-			}
-
-			adapter.deliver <- data
 		}
 	}
+}
+
+func (adapter *Adapter) deliverRecord(message *router.Message, data Record, container *ContainerInfo) {
+	// rewrite format V0 into format V1s
+	if fields, exist := data["@fields"]; exist {
+		if fieldMap, err := fields.(map[string]interface{}); err {
+			for k, v := range fieldMap {
+				data[strings.TrimLeft(k, "@")] = v
+			}
+			delete(data, "@fields")
+		}
+		// convert other fields?
+	}
+
+	// make sure level is a number
+	// and populate log_level as string
+	if v, exist := data["level"]; exist {
+		if nb, ok := v.(string); ok {
+			if _, err := strconv.Atoi(nb); err != nil {
+				data["log_level"] = nb
+				if level, exist := levelToValue[nb]; exist {
+					data["level"] = level
+				} else {
+					delete(data, "level")
+				}
+			}
+		}
+	}
+
+	data["host"] = message.Container.Config.Hostname
+	data["container"] = container
+	data["source"] = message.Source
+
+	if _, exist := data["@timestamp"]; !exist {
+		data["@timestamp"] = message.Time
+	}
+	if _, exist := data["@version"]; !exist {
+		data["@version"] = 1
+	}
+
+	if adapter.printContent && adapter.debugContainers[container.ID] {
+		adapter.logD("stream: %s enqueing: %v \n", container.ID, data)
+	}
+
+	adapter.deliver <- data
 }
 
 func (adapter *Adapter) batchPutToFirehose() {
@@ -386,11 +392,11 @@ func extractKubernetesInfo(container *docker.Container) *ContainerInfo {
 			Namespace: container.Config.Labels["io.kubernetes.pod.namespace"],
 			ID:        normalID(container.ID),
 		}
-	} else {
-		return &ContainerInfo{
-			Name: container.Name,
-			ID:   normalID(container.ID),
-		}
+	}
+
+	return &ContainerInfo{
+		Name: strings.Trim(container.Name, "/"),
+		ID:   normalID(container.ID),
 	}
 }
 

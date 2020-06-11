@@ -22,31 +22,22 @@ See the logspout docs for more launch options.
 
 ## Build
 
-To use, you must build a container image of logspout which contains the firehose adapter.
+```sh
+# Build logspout locally with custom fluentd module using Dockerfile
+docker build --build-arg LOGSPOUT_VERSION=master -t daysofwonder/logspout:v3.2.11-dow01 .
 
-The easiest way to do this reliably is to fork the official logspout repo and add this this repo to the `modules.go` file.
-
-Then `docker build . -t <your-image-tag>` in your forked logspout repo.
-
-I find this approach to work best as it ensures you use a known version of logspout as the base.
-
-Side note: GO dependencies and imports are idiotic constructs so if your fork of logspout breaks later because it is trying to download incompatible versions of dependencies via `go get` just blame the stupidity of GO.
-
-## Development
-
-Similar to the above Build process except you should use the `Dockerfile.dev` in the logspout repo (if it still exists) to build your base logspout image.
-
-In your logspout repo clone/fork.
-
-```
-docker build -t logspout -f Dockerfile.dev .`
+# Example to run custom built logspout locally:
+docker run -it --rm -e DEBUG=yes -e LOG_CONTENT=yes -e DEBUG_CONTAINERS=a4d1cae3aaf8 -e ALLOW_TTY=true -e HTTP_PORT=8181 -e AWS_REGION=us-east-1 -e BACKLOG=false -e TAIL=0 -v $HOME/.aws:/root/.aws -e AWS_PROFILE=admin -e AWS_SDK_LOAD_CONFIG=1 -v /var/run/docker.sock:/var/run/docker.sock daysofwonder/logspout:v3.2.11-dow01 firehose://test
 ```
 
-Then use the `dev.sh` script in this repo to launch a container with a shell where you will build and run logspout as you iterate.
+Then start a container:
 
-In the container, run the following as you make changes.
-
+```sh
+docker run -p 1234:1234 -it alpine/socat tcp-listen:1234,fork,reuseaddr STDOUT
 ```
-go build -ldflags "-X main.Version=dev" -o /bin/logspout
-/bin/logspout firehose://stream-name
+
+And echo a few log lines:
+
+```sh
+echo '{"message":"toto"}{"message":"titi"}' | nc localhost 1234
 ```
